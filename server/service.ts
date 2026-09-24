@@ -24,7 +24,7 @@ export class SimulationService {
   private shutdown = new AbortController();
   private closing = false;
   readonly timeoutMs: number;
-  constructor(readonly store: Store, readonly provider: ImageProvider, readonly model: string, timeoutMs = 300_000) {
+  constructor(readonly store: Store, public provider: ImageProvider, public model: string, timeoutMs = 300_000) {
     this.timeoutMs = timeoutMs;
     store.recover();
   }

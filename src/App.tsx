@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleHelp, Eye, FileImage, ImagePlus, Pencil, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronRight, CircleHelp, Eye, FileImage, ImagePlus, Pencil, RotateCcw, ShieldCheck, Sparkles, Trash2, Zap } from 'lucide-react';
 import { api, ApiError } from './api';
 import { UploadArea } from './components/UploadArea';
 import { MaskEditor } from './components/MaskEditor';
@@ -103,10 +103,49 @@ export default function App() {
       setHistory((old) => ({ items: [...old.items, ...next.items], nextOffset: next.nextOffset }));
     } catch { setNotice('No se pudo cargar más historial. Intenta de nuevo.'); }
   };
+  const changeProvider = async (mode: 'gemini' | 'openai') => {
+    try {
+      await api.switchProvider(mode);
+      const nextHealth = await api.health();
+      setHealth(nextHealth);
+      if (selectedId) {
+        setSim(await api.get(selectedId));
+      }
+      setNotice('');
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : 'No se pudo cambiar de proveedor.');
+    }
+  };
   return <div className="app">
     <header className="site-header">
       <div className="brand"><span className="brand__mark" aria-hidden="true">S</span><span><strong>Sonrisa</strong><small>Estudio de evolución</small></span></div>
-      <span className="site-header__meta"><span className={'status-dot ' + (health?.ready ? 'status-dot--ready' : '')} />{health?.mode === 'test' ? 'Proveedor de prueba' : health?.ready ? `${health?.mode === 'openai' ? 'OpenAI' : 'Gemini'} listo` : 'Preparación local'}</span>
+      <div className="site-header__controls">
+        {health?.mode !== 'test' && (
+          <div className="provider-selector" role="radiogroup" aria-label="Motor de Inteligencia Artificial">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={health?.mode === 'gemini'}
+              className={'provider-pill ' + (health?.mode === 'gemini' ? 'provider-pill--active' : '')}
+              onClick={() => { void changeProvider('gemini'); }}
+            >
+              <Sparkles size={14} aria-hidden="true" />
+              <span>Gemini</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={health?.mode === 'openai'}
+              className={'provider-pill ' + (health?.mode === 'openai' ? 'provider-pill--active' : '')}
+              onClick={() => { void changeProvider('openai'); }}
+            >
+              <Zap size={14} aria-hidden="true" />
+              <span>OpenAI</span>
+            </button>
+          </div>
+        )}
+        <span className="site-header__meta"><span className={'status-dot ' + (health?.ready ? 'status-dot--ready' : '')} />{health?.mode === 'test' ? 'Proveedor de prueba' : health?.ready ? `${health?.mode === 'openai' ? 'OpenAI' : 'Gemini'} listo` : 'Preparación local'}</span>
+      </div>
     </header>
     <div className="app-shell">
       <aside className="sidebar" aria-label="Simulaciones">

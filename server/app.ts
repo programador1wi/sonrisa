@@ -13,6 +13,7 @@ import { isStageKey, MAX_UPLOAD_BYTES, STAGES, STAGE_INFO } from '../shared/doma
 export interface AppOptions {
   dataDir: string; provider: ImageProvider; model: string; staticDir?: string;
   origins?: string[]; timeoutMs?: number;
+  availableProviders?: Record<string, { provider: ImageProvider; model: string }>;
 }
 const idSchema = z.string().uuid();
 const revisionSchema = z.number().int().min(0);
@@ -53,9 +54,43 @@ export async function buildApp(options: AppOptions) {
   });
   await app.register(multipart, { limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 2 } });
   app.get('/api/health', async () => ({
-    ready: options.provider.ready, model: options.model, mode: options.provider.mode, promptVersion: PROMPT_VERSION,
-    ...(!options.provider.ready ? { warning: `Configura ${options.provider.mode === 'openai' ? 'OPENAI_API_KEY' : 'GEMINI_API_KEY'} en .env.local o .env y reinicia el servidor. Puedes preparar la región dental mientras tanto.` } : {}),
+    ready: service.provider.ready, model: service.model, mode: service.provider.mode, promptVersion: PROMPT_VERSION,
+    ...(!service.provider.ready ? { warning: `Configura ${service.provider.mode === 'openai' ? 'OPENAI_API_KEY' : 'GEMINI_API_KEY'} en .env.local o .env y reinicia el servidor. Puedes preparar la región dental mientras tanto.` } : {}),
   }));
+  app.get('/api/providers', async () => {
+    const gemini = options.availableProviders?.gemini;
+    const openai = options.availableProviders?.openai;
+    return {
+      active: service.provider.mode,
+      activeModel: service.model,
+      providers: [
+        {
+          mode: 'gemini',
+          name: 'Gemini',
+          model: gemini?.model ?? (service.provider.mode === 'gemini' ? service.model : 'gemini-3-pro-image'),
+          ready: gemini ? gemini.provider.ready : (service.provider.mode === 'gemini' && service.provider.ready),
+        },
+        {
+          mode: 'openai',
+          name: 'OpenAI',
+          model: openai?.model ?? (service.provider.mode === 'openai' ? service.model : 'gpt-image-2.5-sunburst'),
+          ready: openai ? openai.provider.ready : (service.provider.mode === 'openai' && service.provider.ready),
+        },
+      ],
+    };
+  });
+  app.post('/api/providers/switch', async (request) => {
+    const { mode } = z.object({ mode: z.enum(['gemini', 'openai']) }).parse(request.body);
+    const target = options.availableProviders?.[mode];
+    if (!target) throw new AppError(400, 'PROVIDER_UNAVAILABLE', `El proveedor ${mode} no está disponible en este servidor.`);
+    service.provider = target.provider;
+    service.model = target.model;
+    return {
+      active: service.provider.mode,
+      activeModel: service.model,
+      ready: service.provider.ready,
+    };
+  });
   app.post('/api/simulations', async (request, reply) => {
     const file = await request.file();
     if (!file) throw new AppError(400, 'FILE_REQUIRED', 'Selecciona una fotografía JPEG o PNG.');

@@ -20,6 +20,15 @@ export const api = {
   get: (id: string) => read<Simulation>(fetch('/api/simulations/' + encodeURIComponent(id))),
   prompts: (sim: Simulation, prompts: PromptConfig) =>
     read<Simulation>(json('PUT', '/api/simulations/' + sim.id + '/prompts', { revision: sim.revision, prompts })),
+  providers: () => read<{
+    active: string;
+    activeModel: string;
+    providers: Array<{ mode: string; name: string; model: string; ready: boolean }>;
+  }>(fetch('/api/providers')),
+  switchProvider: (mode: 'gemini' | 'openai') =>
+    read<{ active: string; activeModel: string; ready: boolean }>(
+      json('POST', '/api/providers/switch', { mode })
+    ),
   selectProvider: (sim: Simulation) =>
     read<Simulation>(json('POST', '/api/simulations/' + sim.id + '/provider', { revision: sim.revision })),
   mask: (sim: Simulation, png: string) =>

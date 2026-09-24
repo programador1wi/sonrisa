@@ -10,10 +10,18 @@ config({ path: '.env.local', quiet: true });
 config({ quiet: true });
 const port = Number(process.env.PORT ?? 3001);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('PORT inválido.');
-const imageProvider = process.env.IMAGE_PROVIDER ?? 'gemini';
+const geminiKey = process.env.GEMINI_API_KEY;
+const openaiKey = process.env.OPENAI_API_KEY;
+const geminiModel = process.env.GEMINI_MODEL ?? 'gemini-3-pro-image';
+const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-image-2.5-sunburst';
+
+const geminiProvider = new GeminiProvider(geminiKey);
+const openaiProvider = new OpenAIProvider(openaiKey);
+
+const imageProvider = process.env.IMAGE_PROVIDER ?? (openaiProvider.ready && !geminiProvider.ready ? 'openai' : 'gemini');
 if (imageProvider !== 'gemini' && imageProvider !== 'openai') throw new Error('IMAGE_PROVIDER debe ser gemini u openai.');
-const provider = imageProvider === 'openai' ? new OpenAIProvider(process.env.OPENAI_API_KEY) : new GeminiProvider(process.env.GEMINI_API_KEY);
-const model = imageProvider === 'openai' ? process.env.OPENAI_MODEL ?? 'gpt-image-2.5-sunburst' : process.env.GEMINI_MODEL ?? 'gemini-3-pro-image';
+const activeProvider = imageProvider === 'openai' ? openaiProvider : geminiProvider;
+const activeModel = imageProvider === 'openai' ? openaiModel : geminiModel;
 const dataDir = resolve(process.env.SONRISA_DATA_DIR ?? './data');
 await mkdir(dataDir, { recursive: true });
 const lock = resolve(dataDir, 'instance.lock');
@@ -35,7 +43,11 @@ await acquireLock();
 const origins = ['http://127.0.0.1:5173', 'http://127.0.0.1:' + port];
 try {
   const { app } = await buildApp({
-    dataDir, model, provider,
+    dataDir, model: activeModel, provider: activeProvider,
+    availableProviders: {
+      gemini: { provider: geminiProvider, model: geminiModel },
+      openai: { provider: openaiProvider, model: openaiModel },
+    },
     origins, ...(existsSync(resolve('dist/client/index.html')) ? { staticDir: resolve('dist/client') } : {}),
   });
   let closing = false;
