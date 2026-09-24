@@ -4,6 +4,7 @@ import { api, ApiError } from './api';
 import { UploadArea } from './components/UploadArea';
 import { MaskEditor } from './components/MaskEditor';
 import { PromptEditor } from './components/PromptEditor';
+import { SplitComparisonViewer } from './components/SplitComparisonViewer';
 import { Button, Dialog, ImagePanel, Notice } from './components/ui';
 import { assetUrl, ATTEMPT_LABELS, busySimulation, firstIncomplete, STAGE_INFO, STAGES, STATUS_LABEL, TIMELINE } from '../shared/domain';
 import type { Health, HistoryPage, PromptConfig, Simulation, StageKey } from '../shared/domain';
@@ -288,7 +289,7 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
           disabled={busy || busyJob || !health?.ready || providerMismatch}>{batchLabel}</Button></div>
       {busyJob && <Notice tone="info">Hasta tres imágenes se procesan a la vez. Puedes revisar las que estén listas o recargar la página. Si una falla, las demás continúan; no habrá reintentos automáticos.</Notice>}
       <div className="timeline" aria-label="Línea de tiempo visual">
-        <button type="button" className="timeline-card timeline-card--original" onClick={() => setCompare('month_6')}>
+        <button type="button" className="timeline-card timeline-card--original" onClick={() => setCompare(stage.outputAssetId ? stageKey : 'month_6')}>
           <img src={assetUrl(sim.id, sim.originalAssetId)} alt="Fotografía original sin cambios" />
           <span className="timeline-card__text"><strong>AHORA</strong><small>Original intacto</small></span>
         </button>
@@ -356,9 +357,17 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
       <p>{confirm?.body}</p>
     </Dialog>
     <Dialog open={Boolean(compare)} title={compare ? 'Comparar · ' + STAGE_INFO[compare].label : 'Comparar'} wide onClose={() => setCompare(null)}>
-      {compare && sim.stages[compare].outputAssetId && <div className="compare-images"><ImagePanel id={sim.id} assetId={sim.originalAssetId} label="AHORA" />
-        <ImagePanel id={sim.id} assetId={sim.stages[compare].outputAssetId!} label={STAGE_INFO[compare].label} /></div>}
-      {compare && !sim.stages[compare].outputAssetId && <ImagePanel id={sim.id} assetId={sim.originalAssetId} label="AHORA · original" />}
+      {compare && sim.stages[compare].outputAssetId ? (
+        <SplitComparisonViewer
+          originalUrl={assetUrl(sim.id, sim.originalAssetId)}
+          candidateUrl={assetUrl(sim.id, sim.stages[compare].outputAssetId!)}
+          labelOriginal="AHORA · Fotografía original"
+          labelCandidate={STAGE_INFO[compare].label + ' · ' + STATUS_LABEL[sim.stages[compare].status]}
+          downloadCandidate={sim.stages[compare].status === 'accepted' ? STAGE_INFO[compare].filename : undefined}
+        />
+      ) : (
+        compare && <ImagePanel id={sim.id} assetId={sim.originalAssetId} label="AHORA · original" />
+      )}
     </Dialog>
   </div>;
 }

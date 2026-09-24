@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { Brush, Eraser, RotateCcw, Save, ZoomIn, ZoomOut } from 'lucide-react';
+import { Brush, Eraser, Hand, RotateCcw, Save, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
 import { assetUrl, type Simulation } from '../../shared/domain';
 import { Button, Notice } from './ui';
 
-type Tool = 'brush' | 'erase';
+type Tool = 'brush' | 'erase' | 'pan';
+
 export function MaskEditor({ sim, onSave, onDirtyChange }: {
   sim: Simulation; onSave: (base64: string) => Promise<boolean>; onDirtyChange: (dirty: boolean) => void;
 }) {
@@ -13,10 +14,12 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
   const dragging = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
   const undoStack = useRef<string[]>([]);
+  const panOrigin = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
   const [ready, setReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [undoCount, setUndoCount] = useState(0);
   const [tool, setTool] = useState<Tool>('brush');
+  const [overlayOpacity, setOverlayOpacity] = useState(48);
   const [size, setSize] = useState(() => Math.max(1, Math.min(12, Math.round(sim.width * .008))));
   const [zoom, setZoom] = useState(1);
   const [fit, setFit] = useState(Math.min(900, 560 * sim.width / sim.height));
@@ -33,10 +36,15 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     ctx.clearRect(0, 0, sim.width, sim.height);
     ctx.drawImage(source, 0, 0);
     ctx.globalCompositeOperation = 'source-in';
-    ctx.fillStyle = 'rgba(18, 123, 113, .48)';
+    ctx.fillStyle = `rgba(18, 123, 113, ${overlayOpacity / 100})`;
     ctx.fillRect(0, 0, sim.width, sim.height);
     ctx.globalCompositeOperation = 'source-over';
-  }, [sim.width, sim.height]);
+  }, [sim.width, sim.height, overlayOpacity]);
+
+  useEffect(() => {
+    if (ready) paintOverlay();
+  }, [overlayOpacity, ready, paintOverlay]);
+
   useEffect(() => {
     let cancelled = false;
     const canvas = document.createElement('canvas');
@@ -69,15 +77,17 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     void load().catch(() => { if (!cancelled) setError('No se pudo abrir la máscara guardada. Recarga la página.'); });
     return () => { cancelled = true; maskRef.current = null; };
   }, [sim.id, sim.width, sim.height, sim.maskAssetId, paintOverlay]);
+
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    // Display small source photographs at a usable scale; mask coordinates remain source pixels.
     const observer = new ResizeObserver(() => setFit(Math.min(900, 560 * sim.width / sim.height, Math.max(1, container.clientWidth - 24))));
     observer.observe(container);
     return () => observer.disconnect();
   }, [sim.width, sim.height]);
+
   const saveUndo = () => {
     const canvas = maskRef.current;
     if (!canvas) return;
@@ -85,11 +95,15 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     if (undoStack.current.length > 8) undoStack.current.shift();
     setUndoCount(undoStack.current.length);
   };
+
   const coords = (event: PointerEvent<HTMLCanvasElement>) => {
     const canvas = overlayRef.current!, box = canvas.getBoundingClientRect();
-    return { x: Math.max(0, Math.min(sim.width - 1, (event.clientX - box.left) * sim.width / box.width)),
-      y: Math.max(0, Math.min(sim.height - 1, (event.clientY - box.top) * sim.height / box.height)) };
+    return {
+      x: Math.max(0, Math.min(sim.width - 1, (event.clientX - box.left) * sim.width / box.width)),
+      y: Math.max(0, Math.min(sim.height - 1, (event.clientY - box.top) * sim.height / box.height)),
+    };
   };
+
   const draw = (from: { x: number; y: number }, to: { x: number; y: number }) => {
     const ctx = maskRef.current?.getContext('2d');
     if (!ctx) return;
@@ -99,6 +113,7 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     ctx.globalCompositeOperation = 'source-over';
     paintOverlay(); setDirty(true);
   };
+
   const undo = async () => {
     const previous = undoStack.current.pop();
     if (!previous || !maskRef.current) return;
@@ -109,6 +124,18 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     ctx?.drawImage(image, 0, 0);
     paintOverlay(); setDirty(true);
   };
+
+  const clearSelection = () => {
+    const canvas = maskRef.current;
+    if (!canvas) return;
+    saveUndo();
+    const ctx = canvas.getContext('2d');
+    ctx?.clearRect(0, 0, sim.width, sim.height);
+    paintOverlay();
+    setDirty(true);
+    setError('');
+  };
+
   const addRectangle = () => {
     const { x, y, width, height } = rect;
     if (![x, y, width, height].every(Number.isInteger) || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > sim.width || y + height > sim.height) {
@@ -122,6 +149,7 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     ctx.globalCompositeOperation = 'source-over';
     paintOverlay(); setDirty(true); setError('');
   };
+
   const save = async () => {
     if (!maskRef.current || !dirty) return;
     setSaving(true); setError('');
@@ -138,50 +166,189 @@ export function MaskEditor({ sim, onSave, onDirtyChange }: {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'No se pudo guardar la región dental.'); }
     finally { setSaving(false); }
   };
+
   const updateRect = (field: keyof typeof rect, value: string) => setRect((current) => ({ ...current, [field]: Number(value) }));
-  return <section className="mask-editor" aria-labelledby="mask-title">
-    <div className="section-heading"><div><p className="eyebrow">Paso 01 · delimitar</p><h2 id="mask-title">Marca solo la zona dental</h2>
-      <p>Incluye pequeños espacios donde los dientes pueden alinearse. Protege labios, piel y encías.</p></div></div>
-    <div className="mask-editor__toolbar" role="toolbar" aria-label="Herramientas de máscara">
-      <Button shape={tool === 'brush' ? 'solid' : 'outline'} tone={tool === 'brush' ? 'primary' : 'neutral'} icon={<Brush size={16} />} aria-pressed={tool === 'brush'} onClick={() => setTool('brush')}>Marcar</Button>
-      <Button shape={tool === 'erase' ? 'solid' : 'outline'} tone={tool === 'erase' ? 'primary' : 'neutral'} icon={<Eraser size={16} />} aria-pressed={tool === 'erase'} onClick={() => setTool('erase')}>Borrar</Button>
-      <label className="range-control">Tamaño del pincel <input type="range" min="1" max="100" value={size} onChange={(event) => setSize(Number(event.target.value))} /><span>{size} px</span></label>
-      <Button icon={<RotateCcw size={16} />} onClick={() => { void undo(); }} disabled={!undoCount}>Deshacer</Button>
-      <div className="toolbar-spacer" />
-      <Button icon={<ZoomOut size={16} />} aria-label="Alejar imagen" onClick={() => setZoom((value) => Math.max(1, value - .25))} disabled={zoom <= 1}>Alejar</Button>
-      <span className="zoom-label" aria-label="Zoom respecto al encuadre inicial">{Math.round(zoom * 100)} %</span>
-      <Button icon={<ZoomIn size={16} />} aria-label="Acercar imagen" onClick={() => setZoom((value) => Math.min(8, value + .5))} disabled={zoom >= 8}>Acercar</Button>
-    </div>
-    <div className="mask-editor__viewport" ref={containerRef}>
-      <div className="mask-editor__stage" style={{ width: fit * zoom, height: fit * zoom * sim.height / sim.width }}>
-        <img src={assetUrl(sim.id, sim.workingAssetId)} alt="Fotografía original para delimitar los dientes" draggable={false} />
-        <canvas ref={overlayRef} className="mask-editor__canvas" aria-label="Dibuja sobre la región dental; alternativa numérica debajo"
-          onPointerDown={(event) => { if (!ready) return; event.currentTarget.setPointerCapture(event.pointerId); saveUndo(); dragging.current = true; last.current = coords(event); draw(last.current, last.current); }}
-          onPointerMove={(event) => { const point = coords(event); setCursor(point); if (!dragging.current || !last.current) return; draw(last.current, point); last.current = point; }}
-          onPointerLeave={() => setCursor(null)}
-          onPointerUp={() => { dragging.current = false; last.current = null; }}
-          onPointerCancel={() => { dragging.current = false; last.current = null; }} />
-        {cursor && <span className="mask-editor__brush-preview" aria-hidden="true" style={{
-          left: cursor.x / sim.width * 100 + '%', top: cursor.y / sim.height * 100 + '%',
-          width: size / sim.width * fit * zoom, height: size / sim.width * fit * zoom,
-        }} />}
+
+  // Pointer event handlers for drawing or panning
+  const handlePointerDown = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (!ready) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    if (tool === 'pan') {
+      panOrigin.current = {
+        x: event.clientX,
+        y: event.clientY,
+        scrollLeft: containerRef.current?.scrollLeft ?? 0,
+        scrollTop: containerRef.current?.scrollTop ?? 0,
+      };
+      return;
+    }
+
+    saveUndo();
+    dragging.current = true;
+    last.current = coords(event);
+    draw(last.current, last.current);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (tool === 'pan') {
+      if (!panOrigin.current || !containerRef.current) return;
+      const dx = event.clientX - panOrigin.current.x;
+      const dy = event.clientY - panOrigin.current.y;
+      containerRef.current.scrollLeft = panOrigin.current.scrollLeft - dx;
+      containerRef.current.scrollTop = panOrigin.current.scrollTop - dy;
+      return;
+    }
+
+    const point = coords(event);
+    setCursor(point);
+    if (!dragging.current || !last.current) return;
+    draw(last.current, point);
+    last.current = point;
+  };
+
+  const handlePointerUp = () => {
+    dragging.current = false;
+    last.current = null;
+    panOrigin.current = null;
+  };
+
+  return (
+    <section className="mask-editor" aria-labelledby="mask-title">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Paso 01 · delimitar</p>
+          <h2 id="mask-title">Marca solo la zona dental</h2>
+          <p>Incluye pequeños espacios donde los dientes pueden alinearse. Protege labios, piel y encías.</p>
+        </div>
       </div>
-    </div>
-    <p className="muted">Amplía la boca antes de marcar. El círculo muestra el diámetro del pincel; acercar la vista no añade detalle a la fotografía.</p>
-    <details className="rectangle-entry"><summary>Alternativa sin arrastrar: marcar por coordenadas</summary>
-      <div className="rectangle-entry__grid">
-        {(['x', 'y', 'width', 'height'] as const).map((field) => <label key={field}>
-          {field === 'x' ? 'Posición X' : field === 'y' ? 'Posición Y' : field === 'width' ? 'Ancho' : 'Alto'}
-          <input type="number" min={field === 'width' || field === 'height' ? 1 : 0} max={field === 'x' || field === 'width' ? sim.width : sim.height}
-            value={rect[field]} onChange={(event) => updateRect(field, event.target.value)} />
-        </label>)}
-        <Button onClick={addRectangle}>{tool === 'erase' ? 'Borrar rectángulo' : 'Marcar rectángulo'}</Button>
+      <div className="mask-editor__toolbar" role="toolbar" aria-label="Herramientas de máscara">
+        <Button
+          shape={tool === 'brush' ? 'solid' : 'outline'}
+          tone={tool === 'brush' ? 'primary' : 'neutral'}
+          icon={<Brush size={16} />}
+          aria-pressed={tool === 'brush'}
+          onClick={() => setTool('brush')}
+        >
+          Marcar
+        </Button>
+        <Button
+          shape={tool === 'erase' ? 'solid' : 'outline'}
+          tone={tool === 'erase' ? 'primary' : 'neutral'}
+          icon={<Eraser size={16} />}
+          aria-pressed={tool === 'erase'}
+          onClick={() => setTool('erase')}
+        >
+          Borrar
+        </Button>
+        <Button
+          shape={tool === 'pan' ? 'solid' : 'outline'}
+          tone={tool === 'pan' ? 'primary' : 'neutral'}
+          icon={<Hand size={16} />}
+          aria-pressed={tool === 'pan'}
+          onClick={() => setTool('pan')}
+        >
+          Mover
+        </Button>
+        <label className="range-control">
+          Tamaño del pincel
+          <input
+            type="range"
+            min="1"
+            max="100"
+            value={size}
+            aria-label="Tamaño del pincel"
+            onChange={(event) => setSize(Number(event.target.value))}
+          />
+          <span>{size} px</span>
+        </label>
+        <label className="range-control">
+          Opacidad
+          <input
+            type="range"
+            min="15"
+            max="85"
+            value={overlayOpacity}
+            aria-label="Opacidad de la máscara verde"
+            onChange={(event) => setOverlayOpacity(Number(event.target.value))}
+          />
+          <span>{overlayOpacity} %</span>
+        </label>
+        <Button icon={<RotateCcw size={16} />} onClick={() => { void undo(); }} disabled={!undoCount}>
+          Deshacer
+        </Button>
+        <Button icon={<Trash2 size={16} />} onClick={clearSelection} disabled={!dirty && !sim.maskAssetId} aria-label="Limpiar selección completa">
+          Limpiar
+        </Button>
+        <div className="toolbar-spacer" />
+        <Button icon={<ZoomOut size={16} />} aria-label="Alejar imagen" onClick={() => setZoom((value) => Math.max(1, value - .25))} disabled={zoom <= 1}>
+          Alejar
+        </Button>
+        <span className="zoom-label" aria-label="Zoom respecto al encuadre inicial">{Math.round(zoom * 100)} %</span>
+        <Button icon={<ZoomIn size={16} />} aria-label="Acercar imagen" onClick={() => setZoom((value) => Math.min(8, value + .5))} disabled={zoom >= 8}>
+          Acercar
+        </Button>
       </div>
-      <p>Coordenadas sobre la copia de trabajo: {sim.width} × {sim.height} píxeles.</p>
-    </details>
-    {error && <Notice tone="danger">{error}</Notice>}
-    <div className="mask-editor__footer"><p className="muted">{dirty ? 'Selección sin guardar' : sim.maskAssetId ? 'Selección guardada' : 'Dibuja para continuar'}</p>
-      <Button tone="primary" shape="solid" icon={<Save size={18} />} disabled={!dirty || saving || !ready} onClick={() => { void save(); }}>{saving ? 'Guardando…' : 'Confirmar región dental'}</Button>
-    </div>
-  </section>;
+      <div className="mask-editor__viewport" ref={containerRef}>
+        <div className="mask-editor__stage" style={{ width: fit * zoom, height: fit * zoom * sim.height / sim.width }}>
+          <img src={assetUrl(sim.id, sim.workingAssetId)} alt="Fotografía original para delimitar los dientes" draggable={false} />
+          <canvas
+            ref={overlayRef}
+            className={'mask-editor__canvas ' + (tool === 'pan' ? 'mask-editor__canvas--pan' : '')}
+            aria-label="Dibuja sobre la región dental; alternativa numérica debajo"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={() => { setCursor(null); if (tool === 'pan') panOrigin.current = null; }}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          />
+          {cursor && tool !== 'pan' && (
+            <span
+              className="mask-editor__brush-preview"
+              aria-hidden="true"
+              style={{
+                left: cursor.x / sim.width * 100 + '%',
+                top: cursor.y / sim.height * 100 + '%',
+                width: size / sim.width * fit * zoom,
+                height: size / sim.width * fit * zoom,
+              }}
+            />
+          )}
+        </div>
+      </div>
+      <p className="muted">Amplía la boca antes de marcar. El círculo muestra el diámetro del pincel; la herramienta Mover te permite desplazarte con zoom alto.</p>
+      <details className="rectangle-entry">
+        <summary>Alternativa sin arrastrar: marcar por coordenadas</summary>
+        <div className="rectangle-entry__grid">
+          {(['x', 'y', 'width', 'height'] as const).map((field) => (
+            <label key={field}>
+              {field === 'x' ? 'Posición X' : field === 'y' ? 'Posición Y' : field === 'width' ? 'Ancho' : 'Alto'}
+              <input
+                type="number"
+                min={field === 'width' || field === 'height' ? 1 : 0}
+                max={field === 'x' || field === 'width' ? sim.width : sim.height}
+                value={rect[field]}
+                onChange={(event) => updateRect(field, event.target.value)}
+              />
+            </label>
+          ))}
+          <Button onClick={addRectangle}>{tool === 'erase' ? 'Borrar rectángulo' : 'Marcar rectángulo'}</Button>
+        </div>
+        <p>Coordenadas sobre la copia de trabajo: {sim.width} × {sim.height} píxeles.</p>
+      </details>
+      {error && <Notice tone="danger">{error}</Notice>}
+      <div className="mask-editor__footer">
+        <p className="muted">{dirty ? 'Selección sin guardar' : sim.maskAssetId ? 'Selección guardada' : 'Dibuja para continuar'}</p>
+        <Button
+          tone="primary"
+          shape="solid"
+          icon={<Save size={18} />}
+          disabled={!dirty || saving || !ready}
+          onClick={() => { void save(); }}
+        >
+          {saving ? 'Guardando…' : 'Confirmar región dental'}
+        </Button>
+      </div>
+    </section>
+  );
 }
