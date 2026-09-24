@@ -307,8 +307,8 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
   return <div className="workspace">
     <div className="workspace__top"><div><p className="eyebrow">Estudio local · {date(sim.createdAt)}</p>
         <h1>{sim.name}</h1><p className="muted">{sim.width} × {sim.height} píxeles · {acceptedCount} de 3 etapas aceptadas · {sim.provider === 'openai' ? 'OpenAI' : sim.provider === 'test' ? 'Prueba' : 'Gemini'}</p></div>
-      <div className="workspace__top-actions">{!editingPrompts && <Button shape="ghost" icon={<ArrowLeft size={16} />} onClick={() => setEditingMask(true)} disabled={busyJob}>Ajustar región</Button>}
-        {!editingMask && !editingPrompts && <Button id="edit-prompts-trigger" shape="ghost" icon={<Pencil size={16} />}
+      <div className="workspace__top-actions">{!editingPrompts && <Button shape="outline" icon={<ArrowLeft size={16} />} onClick={() => setEditingMask(true)} disabled={busyJob}>Ajustar región</Button>}
+        {!editingMask && !editingPrompts && <Button id="edit-prompts-trigger" shape="outline" icon={<Pencil size={16} />}
           onClick={() => { promptReturnFocus.current = true; setEditingPrompts(true); }} disabled={busyJob}>Editar prompts</Button>}
         <Button shape="ghost" tone="danger" icon={<Trash2 size={16} />} onClick={deleteSim} disabled={busyJob || busy || editingPrompts}>Eliminar</Button></div>
     </div>
@@ -365,14 +365,14 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
           </div>}
           {stage.status === 'needs_review' && <div className="review-panel__review">
             <Notice tone="info">Revisa dientes, labios, brackets y progresión. La validación técnica solo garantiza el exterior de la máscara.</Notice>
-            <Button icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Comparar en grande</Button>
+            <Button tone="neutral" shape="outline" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Comparar en grande</Button>
             <Button tone="danger" shape="outline" disabled={busy} onClick={() => { void review('reject'); }}>Rechazar candidato</Button>
             <Button tone="primary" shape="solid" icon={<Check size={18} />} disabled={busy} onClick={() => { void review('accept'); }}>
               {stageKey === 'final' ? 'Aceptar etapa' : 'Aceptar y revisar siguiente'}
             </Button>
           </div>}
           {stage.status === 'accepted' && <Notice tone="success">Etapa aceptada. Puedes revisar o descargar su fotografía independiente.</Notice>}
-          {stage.outputAssetId && <Button shape="ghost" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Abrir comparación</Button>}
+          {stage.outputAssetId && <Button tone="neutral" shape="outline" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Abrir comparación</Button>}
         </aside>
       </div>
       {allAccepted && <section className="completion" role="status"><Check size={22} /><div><h2>Las tres etapas están listas</h2><p>Descarga cada fotografía desde su etapa. AHORA sigue siendo el archivo original.</p></div></section>}
