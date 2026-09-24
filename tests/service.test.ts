@@ -420,4 +420,30 @@ describe('flujo persistente', () => {
       expect(ctx.provider.calls).toHaveLength(0);
     } finally { await reopened.close(); await ctx.close(); }
   });
+  it('soporta secciones independientes (brackets, carillas, blanqueamiento) sobre la misma foto y máscara', async () => {
+    const ctx = await setup();
+    try {
+      const sim = await prepared(ctx.service);
+      // Generar lote de carillas
+      await ctx.service.enqueueBatch(sim.id, sim.revision, randomUUID(), '', 'carillas');
+      await ctx.service.waitIdle();
+      let current = ctx.service.get(sim.id);
+      expect(ctx.provider.calls).toHaveLength(3);
+      expect(current.stages.veneer_natural.status).toBe('needs_review');
+      expect(current.stages.veneer_white.status).toBe('needs_review');
+      expect(current.stages.veneer_bleach.status).toBe('needs_review');
+      expect(current.stages.month_6.status).toBe('pending');
+
+      // Generar lote de blanqueamiento sin tocar carillas
+      await ctx.service.enqueueBatch(sim.id, current.revision, randomUUID(), '', 'blanqueamiento');
+      await ctx.service.waitIdle();
+      current = ctx.service.get(sim.id);
+      expect(ctx.provider.calls).toHaveLength(6);
+      expect(current.stages.whitening_mild.status).toBe('needs_review');
+      expect(current.stages.whitening_medium.status).toBe('needs_review');
+      expect(current.stages.whitening_intense.status).toBe('needs_review');
+      // Las carillas siguen intactas
+      expect(current.stages.veneer_natural.status).toBe('needs_review');
+    } finally { await ctx.close(); }
+  });
 });

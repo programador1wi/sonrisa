@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Simulation, Asset, HistoryPage } from '../shared/domain.js';
-import { busySimulation, STAGES } from '../shared/domain.js';
+import { busySimulation, STAGES, ALL_STAGE_KEYS, type Stage, type StageKey } from '../shared/domain.js';
 import { DEFAULT_PROMPTS } from '../shared/prompts.js';
 import { IMPROVED_DEFAULT_PROMPTS } from './improved-prompts.js';
 import { AppError } from './errors.js';
@@ -35,7 +35,7 @@ export class Store {
             month_6: { key: 'month_6', version: oldMonth6?.version ?? 0, status: 'pending' },
             month_18: { key: 'month_18', version: 0, status: 'pending' },
             final: { key: 'final', version: oldFinal?.version ?? 0, status: 'pending' },
-          };
+          } as Record<StageKey, Stage>;
           sim.timelineVersion = 2;
           sim.migratedFromLegacyTimeline = true;
           for (const attempt of sim.attempts) {
@@ -58,7 +58,7 @@ export class Store {
             sim.prompts.common = DEFAULT_PROMPTS.common;
             restored = true;
           }
-          for (const key of STAGES) if (sim.prompts.stages[key].trim() === IMPROVED_DEFAULT_PROMPTS.stages[key]) {
+          for (const key of STAGES) if (sim.prompts.stages[key]?.trim() === IMPROVED_DEFAULT_PROMPTS.stages[key]) {
             sim.prompts.stages[key] = DEFAULT_PROMPTS.stages[key];
             restored = true;
           }
@@ -78,7 +78,8 @@ export class Store {
     return row ? JSON.parse(String(row.document)) as Simulation : undefined;
   }
   all(): Simulation[] {
-    return this.db.prepare('SELECT document FROM simulations ORDER BY updated_at DESC, id').all().map((row) => JSON.parse(String(row.document)) as Simulation);
+    return this.db.prepare('SELECT document FROM simulations ORDER BY updated_at DESC, id').all()
+      .map((row) => JSON.parse(String(row.document)) as Simulation);
   }
   history(offset: number, limit = 20): HistoryPage {
     const rows = this.db.prepare('SELECT document FROM simulations ORDER BY updated_at DESC, id LIMIT ? OFFSET ?').all(limit + 1, offset);
@@ -87,7 +88,7 @@ export class Store {
         const sim = JSON.parse(String(row.document)) as Simulation;
         return { id: sim.id, name: sim.name, createdAt: sim.createdAt, updatedAt: sim.updatedAt,
           originalAssetId: sim.originalAssetId, width: sim.width, height: sim.height,
-          accepted: STAGES.filter((key) => sim.stages[key].status === 'accepted').length, busy: busySimulation(sim) };
+          accepted: ALL_STAGE_KEYS.filter((key) => sim.stages[key]?.status === 'accepted').length, busy: busySimulation(sim) };
       }),
       nextOffset: rows.length > limit ? offset + limit : null,
     };

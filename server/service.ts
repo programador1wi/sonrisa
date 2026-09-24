@@ -5,7 +5,7 @@ import { AppError, requireValue } from './errors.js';
 import { composeDental, extractCrop, hash, inspectVisualCandidate, normalizeOriginal, prepareMask } from './images.js';
 import { buildPrompt, DEFAULT_PROMPTS, PROMPT_VERSION } from '../shared/prompts.js';
 import type { ImageProvider } from './provider.js';
-import { busySimulation, STAGES } from '../shared/domain.js';
+import { busySimulation, STAGES, ALL_STAGE_KEYS, sectionStages, type StudioSection } from '../shared/domain.js';
 import type { Attempt, PromptConfig, Simulation, Stage, StageKey, VisualCheck } from '../shared/domain.js';
 
 class Serial {
@@ -36,10 +36,10 @@ export class SimulationService {
   // Recheck only unreviewed results created before this safeguard. Accepted
   // results and all historical assets remain untouched.
   async auditPendingVisuals() {
-    for (const snapshot of this.store.all()) for (const key of STAGES) {
+    for (const snapshot of this.store.all()) for (const key of ALL_STAGE_KEYS) {
       const stage = snapshot.stages[key];
-      const attempt = snapshot.attempts.find((item) => item.id === stage.attemptId);
-      if (stage.status !== 'needs_review' || !attempt?.candidateAssetId || attempt.visualCheck?.version === 1 ||
+      const attempt = snapshot.attempts.find((item) => item.id === stage?.attemptId);
+      if (stage?.status !== 'needs_review' || !attempt?.candidateAssetId || attempt.visualCheck?.version === 1 ||
         !snapshot.maskAssetId || !snapshot.bounds) continue;
       let check: VisualCheck | undefined;
       let failure: AppError | undefined;
@@ -105,22 +105,27 @@ export class SimulationService {
       sim.maskAssetId = await this.store.put(sim, png, { kind: 'mask', mime: 'image/png', version: sim.maskVersion });
       sim.cropAssetId = await this.store.put(sim, crop, { kind: 'crop', mime: 'image/png', version: sim.maskVersion });
       sim.bounds = bounds;
-      this.invalidate(sim, [...STAGES]);
+      this.invalidate(sim, [...ALL_STAGE_KEYS]);
       this.store.save(sim);
       return sim;
     });
   }
   private invalidate(sim: Simulation, stages: StageKey[]) {
-    for (const key of stages) sim.stages[key] = { key, version: sim.stages[key].version, status: 'pending' };
+    for (const key of stages) {
+      if (sim.stages[key]) {
+        sim.stages[key] = { key, version: sim.stages[key].version, status: 'pending' };
+      }
+    }
   }
   private dependentStages(sim: Simulation, key: StageKey): StageKey[] {
     const invalid = new Set<StageKey>([key]);
     const result: StageKey[] = [];
-    for (const candidate of STAGES) {
+    for (const candidate of ALL_STAGE_KEYS) {
       if (candidate === key) continue;
-      const attempt = sim.attempts.find((item) => item.id === sim.stages[candidate].attemptId);
+      if (!sim.stages[candidate]) continue;
+      const attempt = sim.attempts.find((item) => item.id === sim.stages[candidate]?.attemptId);
       if (!attempt || ![...invalid].some((parent) =>
-        sim.stages[parent].cropAssetId && attempt.references.some((ref) => ref.assetId === sim.stages[parent].cropAssetId))) continue;
+        sim.stages[parent]?.cropAssetId && attempt.references.some((ref) => ref.assetId === sim.stages[parent]?.cropAssetId))) continue;
       invalid.add(candidate);
       result.push(candidate);
     }
@@ -129,9 +134,13 @@ export class SimulationService {
   async savePrompts(id: string, revision: number, prompts: PromptConfig) {
     return this.serial.run(() => {
       const sim = this.editable(id, revision);
+      const normalizedStages: Partial<Record<StageKey, string>> = {};
+      for (const key of ALL_STAGE_KEYS) {
+        if (prompts.stages[key]) normalizedStages[key] = prompts.stages[key]!.trim();
+      }
       const normalized: PromptConfig = {
         common: prompts.common.trim(),
-        stages: Object.fromEntries(STAGES.map((key) => [key, prompts.stages[key].trim()])) as Record<StageKey, string>,
+        stages: normalizedStages,
       };
       if (JSON.stringify(sim.prompts) === JSON.stringify(normalized)) return sim;
       sim.prompts = normalized;
@@ -173,6 +182,9 @@ export class SimulationService {
         { role: 'ORIGINAL PATIENT PHOTO — mandatory primary reference; do not output this full frame', assetId: sim.originalAssetId },
         { role: 'WORK CROP — edit and return only this square crop; preserve all coordinates', assetId: sim.cropAssetId },
       ];
+      if (!sim.stages[key]) {
+        sim.stages[key] = { key, version: 0, status: 'pending' };
+      }
       const version = sim.stages[key].version + 1;
       this.invalidate(sim, [key, ...this.dependentStages(sim, key)]);
       const attempt: Attempt = {
@@ -189,9 +201,9 @@ export class SimulationService {
     this.kick();
     return result;
   }
-  async enqueueBatch(id: string, revision: number, requestId: string, notes: string) {
+  async enqueueBatch(id: string, revision: number, requestId: string, notes: string, section: StudioSection = 'brackets') {
     const result = await this.serial.run(() => {
-      const fingerprint = hash(Buffer.from(JSON.stringify({ id, revision, notes, operation: 'batch' })));
+      const fingerprint = hash(Buffer.from(JSON.stringify({ id, revision, notes, operation: 'batch', section })));
       const previous = this.store.request(requestId);
       if (previous) {
         if (previous.simulationId !== id || previous.fingerprint !== fingerprint)
@@ -204,10 +216,13 @@ export class SimulationService {
       if (!this.provider.ready) throw new AppError(503, 'MISSING_KEY', 'Configura la clave del proveedor y reinicia el servidor.');
       if (!sim.maskAssetId || !sim.cropAssetId || !sim.bounds)
         throw new AppError(409, 'MASK_REQUIRED', 'Confirma primero la región dental.');
-      const keys: StageKey[] = [...STAGES];
+      const keys: StageKey[] = [...sectionStages(section)];
       const batchId = randomUUID();
       this.invalidate(sim, keys);
       for (const key of keys) {
+        if (!sim.stages[key]) {
+          sim.stages[key] = { key, version: 0, status: 'pending' };
+        }
         const version = sim.stages[key].version + 1;
         const references = [
           { role: 'ORIGINAL PATIENT PHOTO — mandatory primary identity and tooth reference', assetId: sim.originalAssetId },
@@ -253,7 +268,7 @@ export class SimulationService {
     this.worker = this.pump().then(() => {
       this.worker = undefined;
       // An enqueue can land between the final empty check and this callback.
-      if (!this.closing && this.store.all().some((sim) => STAGES.some((key) => sim.stages[key].status === 'queued'))) this.kick();
+      if (!this.closing && this.store.all().some((sim) => ALL_STAGE_KEYS.some((key) => sim.stages[key]?.status === 'queued'))) this.kick();
     }, (error: unknown) => { this.worker = undefined; throw error; });
     // Unexpected infrastructure errors must not become unhandled rejections or automatic paid retries.
     void this.worker.catch(() => undefined);
@@ -264,9 +279,9 @@ export class SimulationService {
       while (!this.closing) {
         const snapshots = await this.serial.run(() => {
           if (this.closing) return [];
-          const queued = this.store.all().flatMap((sim) => STAGES
-            .filter((key) => sim.stages[key].status === 'queued')
-            .map((key) => ({ sim, key, attempt: requireValue(sim.attempts.find((a) => a.id === sim.stages[key].attemptId)) })))
+          const queued = this.store.all().flatMap((sim) => ALL_STAGE_KEYS
+            .filter((key) => sim.stages[key]?.status === 'queued')
+            .map((key) => ({ sim, key, attempt: requireValue(sim.attempts.find((a) => a.id === sim.stages[key]?.attemptId)) })))
             .sort((a, b) => a.attempt.createdAt.localeCompare(b.attempt.createdAt))
             .slice(0, this.concurrency - active.size);
           for (const item of queued) {

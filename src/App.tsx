@@ -6,7 +6,7 @@ import { MaskEditor } from './components/MaskEditor';
 import { PromptEditor } from './components/PromptEditor';
 import { SplitComparisonViewer } from './components/SplitComparisonViewer';
 import { Button, Dialog, ImagePanel, Notice } from './components/ui';
-import { assetUrl, ATTEMPT_LABELS, busySimulation, firstIncomplete, STAGE_INFO, STAGES, STATUS_LABEL, TIMELINE } from '../shared/domain';
+import { assetUrl, ATTEMPT_LABELS, busySimulation, firstIncomplete, STAGE_INFO, STAGES, STATUS_LABEL, SECTION_LABELS, SECTION_STAGES, sectionStages, ALL_STAGE_KEYS, type StudioSection } from '../shared/domain';
 import type { Health, HistoryPage, PromptConfig, Simulation, StageKey } from '../shared/domain';
 
 const date = (value: string) => new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
@@ -217,19 +217,21 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
       document.getElementById('edit-prompts-trigger')?.focus();
     }
   }, [editingPrompts]);
-  const stageKey = focus ?? firstIncomplete(sim) ?? 'final';
-  const stage = sim.stages[stageKey];
-  const busyJob = busySimulation(sim);
-  const allAccepted = STAGES.every((key) => sim.stages[key].status === 'accepted');
-  const acceptedCount = STAGES.filter((key) => sim.stages[key].status === 'accepted').length;
+  const [activeSection, setActiveSection] = useState<StudioSection>('brackets');
+  const currentStages = sectionStages(activeSection);
+  const stageKey = (focus && currentStages.includes(focus)) ? focus : (firstIncomplete(sim, activeSection) ?? currentStages[currentStages.length - 1]!);
+  const stage = sim.stages[stageKey] ?? { key: stageKey, version: 0, status: 'pending' };
+  const busyJob = busySimulation(sim, activeSection);
+  const allAccepted = currentStages.every((key) => sim.stages[key]?.status === 'accepted');
+  const acceptedCount = currentStages.filter((key) => sim.stages[key]?.status === 'accepted').length;
   const providerMismatch = Boolean(health && (sim.provider ?? 'gemini') !== health.mode);
   const providerName = health?.mode === 'openai' ? 'OpenAI' : 'Gemini';
   const providerCanChange = providerMismatch && Boolean(health?.ready) && sim.attempts.length === 0 &&
-    STAGES.every((key) => sim.stages[key].status === 'pending' && !sim.stages[key].outputAssetId);
-  const month6Attempt = sim.attempts.find((attempt) => attempt.id === sim.stages.month_6.attemptId);
-  const month6Outdated = Boolean(month6Attempt && health?.promptVersion &&
+    ALL_STAGE_KEYS.every((key) => sim.stages[key]?.status === 'pending' && !sim.stages[key]?.outputAssetId);
+  const month6Attempt = sim.attempts.find((attempt) => attempt.id === sim.stages.month_6?.attemptId);
+  const month6Outdated = Boolean(activeSection === 'brackets' && month6Attempt && health?.promptVersion &&
     (month6Attempt.promptVersion !== health.promptVersion || month6Attempt.promptRevision !== sim.promptRevision));
-  const batchLabel = 'Generar las 3 imágenes';
+  const batchLabel = SECTION_LABELS[activeSection].batchLabel;
   const act = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
     setBusy(true); onError('');
     try { return await fn(); }
@@ -269,20 +271,20 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
     if (next) { setSim(next); void refreshHistory(); }
   };
   const generateBatch = async () => {
-    const result = await act(() => api.generateBatch(sim, crypto.randomUUID()));
-    if (result) { setSim(result.simulation); setFocus('month_6'); void refreshHistory(); }
+    const result = await act(() => api.generateBatch(sim, crypto.randomUUID(), activeSection));
+    if (result) { setSim(result.simulation); setFocus(currentStages[0]!); void refreshHistory(); }
   };
   const requestBatch = () => {
-    const replaces = STAGES.some((key) => sim.stages[key].status !== 'pending');
+    const replaces = currentStages.some((key) => sim.stages[key]?.status !== 'pending');
     if (replaces) setConfirm({
-      title: 'Generar secuencia completa',
-      body: `Se solicitarán 3 imágenes en paralelo a ${providerName}: 6 meses, 18 meses y resultado final. Cada llamada puede tener costo, incluso si otra falla. Los resultados vigentes se reemplazarán y los intentos anteriores quedarán en el historial.`,
+      title: activeSection === 'brackets' ? 'Generar secuencia completa' : activeSection === 'carillas' ? 'Generar 3 tonos de carillas' : 'Generar 3 niveles de blanqueamiento',
+      body: `Se solicitarán 3 imágenes en paralelo a ${providerName} para ${SECTION_LABELS[activeSection].title}. Cada llamada puede tener costo, incluso si otra falla. Los resultados vigentes se reemplazarán y los intentos anteriores quedarán en el historial.`,
       action: batchLabel, tone: 'primary', run: generateBatch,
     });
     else void generateBatch();
   };
   const requestGeneration = () => {
-    if (stage.status !== 'pending' || STAGES.some((key) => sim.stages[key].status !== 'pending' && key !== stageKey)) {
+    if (stage.status !== 'pending' || currentStages.some((key) => sim.stages[key]?.status !== 'pending' && key !== stageKey)) {
       setConfirm({
         title: 'Generar nueva versión', body: `Se enviará una nueva petición a ${providerName} para esta etapa. Las imágenes generadas en paralelo se conservan. Si una imagen antigua usó esta etapa como referencia, dejará de estar vigente. Los intentos anteriores quedarán en el historial.`,
         action: 'Generar nueva versión', tone: 'primary', run: async () => { await generate(stageKey); },
@@ -294,7 +296,7 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
     if (!reviewed) return;
     setSim(reviewed); void refreshHistory();
     if (decision === 'accept') {
-      const next = STAGES.slice(STAGES.indexOf(stageKey) + 1).find((key) => reviewed.stages[key].status === 'needs_review');
+      const next = currentStages.slice(currentStages.indexOf(stageKey) + 1).find((key) => reviewed.stages[key]?.status === 'needs_review');
       if (next) setFocus(next);
     }
   };
@@ -322,18 +324,88 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
     {editingMask ? <MaskEditor key={sim.id + '-' + sim.maskVersion} sim={sim} onSave={saveMask} onDirtyChange={onDirtyChange} /> :
       editingPrompts ? <PromptEditor sim={sim} saving={busy} onDirtyChange={onDirtyChange} onSave={savePrompts}
         onCancel={() => { onDirtyChange(false); setEditingPrompts(false); }} /> : <>
-      <div className="section-heading"><div><p className="eyebrow">Paso 02 · generar y revisar</p><h2>Una evolución, tres fotografías</h2>
-        <p>Genera 6 meses, 18 meses y resultado final en paralelo desde el mismo original. Cada fotografía aparece en cuanto está lista.</p></div>
+      <nav className="section-tabs" role="tablist" aria-label="Secciones de tratamiento dental">
+        <button
+          type="button"
+          role="tab"
+          id="tab-brackets"
+          aria-selected={activeSection === 'brackets'}
+          className={'section-tab ' + (activeSection === 'brackets' ? 'section-tab--active' : '')}
+          onClick={() => { setActiveSection('brackets'); setFocus(null); }}
+        >
+          <span className="section-tab__icon" aria-hidden="true">🦷</span>
+          <span className="section-tab__text">
+            <strong>Ortodoncia & Brackets</strong>
+            <small>Evolución 6m, 18m y final</small>
+          </span>
+          {SECTION_STAGES.brackets.filter((k) => sim.stages[k]?.status === 'accepted').length > 0 && (
+            <span className="section-tab__badge">
+              {SECTION_STAGES.brackets.filter((k) => sim.stages[k]?.status === 'accepted').length}/3
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-carillas"
+          aria-selected={activeSection === 'carillas'}
+          className={'section-tab ' + (activeSection === 'carillas' ? 'section-tab--active' : '')}
+          onClick={() => { setActiveSection('carillas'); setFocus(null); }}
+        >
+          <span className="section-tab__icon" aria-hidden="true">✨</span>
+          <span className="section-tab__text">
+            <strong>Carillas Dentales</strong>
+            <small>Natural, Blanco y Muy Blanco</small>
+          </span>
+          {SECTION_STAGES.carillas.filter((k) => sim.stages[k]?.status === 'accepted').length > 0 && (
+            <span className="section-tab__badge">
+              {SECTION_STAGES.carillas.filter((k) => sim.stages[k]?.status === 'accepted').length}/3
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-blanqueamiento"
+          aria-selected={activeSection === 'blanqueamiento'}
+          className={'section-tab ' + (activeSection === 'blanqueamiento' ? 'section-tab--active' : '')}
+          onClick={() => { setActiveSection('blanqueamiento'); setFocus(null); }}
+        >
+          <span className="section-tab__icon" aria-hidden="true">⚡</span>
+          <span className="section-tab__text">
+            <strong>Blanqueamiento Dental</strong>
+            <small>Aclarado +2, +4 y +6 tonos</small>
+          </span>
+          {SECTION_STAGES.blanqueamiento.filter((k) => sim.stages[k]?.status === 'accepted').length > 0 && (
+            <span className="section-tab__badge">
+              {SECTION_STAGES.blanqueamiento.filter((k) => sim.stages[k]?.status === 'accepted').length}/3
+            </span>
+          )}
+        </button>
+      </nav>
+
+      <div className="section-heading"><div><p className="eyebrow">
+        {activeSection === 'brackets' ? 'Paso 02 · generar y revisar' : activeSection === 'carillas' ? 'Módulo 02 · carillas de porcelana' : 'Módulo 03 · blanqueamiento dental'}
+      </p><h2>
+        {activeSection === 'brackets' ? 'Una evolución, tres fotografías' : activeSection === 'carillas' ? 'Tres tonalidades de porcelana' : 'Tres niveles de aclaramiento'}
+      </h2>
+        <p>
+          {activeSection === 'brackets'
+            ? 'Genera 6 meses, 18 meses y resultado final en paralelo desde el mismo original. Cada fotografía aparece en cuanto está lista.'
+            : activeSection === 'carillas'
+            ? 'Genera 3 opciones estéticas: Tono Natural (A2/A3), Blanco Estético (A1/B1) y Muy Blanco (BL1 Hollywood).'
+            : 'Genera 3 intensidades de blanqueamiento: Aclarado Suave (+2 tonos), Medio (+4 tonos) e Intenso (+6 tonos) sin alterar la anatomía original.'}
+        </p></div>
         <Button tone="primary" shape="solid" icon={<ImagePlus size={18} />} onClick={requestBatch}
           disabled={busy || busyJob || !health?.ready || providerMismatch}>{batchLabel}</Button></div>
       {busyJob && <Notice tone="info">Hasta tres imágenes se procesan a la vez. Puedes revisar las que estén listas o recargar la página. Si una falla, las demás continúan; no habrá reintentos automáticos.</Notice>}
-      <div className="timeline" aria-label="Línea de tiempo visual">
-        <button type="button" className="timeline-card timeline-card--original" onClick={() => setCompare(stage.outputAssetId ? stageKey : 'month_6')}>
+      <div className="timeline" aria-label={'Secuenciador de ' + SECTION_LABELS[activeSection].title}>
+        <button type="button" className="timeline-card timeline-card--original" onClick={() => setCompare(stage.outputAssetId ? stageKey : currentStages[0]!)}>
           <img src={assetUrl(sim.id, sim.originalAssetId)} alt="Fotografía original sin cambios" />
           <span className="timeline-card__text"><strong>AHORA</strong><small>Original intacto</small></span>
         </button>
-        {TIMELINE.map((key) => {
-          const item = sim.stages[key];
+        {currentStages.map((key) => {
+          const item = sim.stages[key] ?? { key, version: 0, status: 'pending' };
           return <button key={key} type="button" className={'timeline-card ' + (stageKey === key ? 'timeline-card--active' : '')} aria-pressed={stageKey === key} onClick={() => { setFocus(key); setNotes(''); }}>
             {item.outputAssetId ? <img src={assetUrl(sim.id, item.outputAssetId)} alt={'Resultado de ' + STAGE_INFO[key].label} /> : <span className="timeline-card__placeholder"><FileImage size={22} /></span>}
             <span className="timeline-card__text"><strong>{STAGE_INFO[key].label}</strong><small>{item.status === 'failed' && sim.attempts.some((attempt) =>
@@ -349,11 +421,20 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
             download={stage.status === 'accepted' ? STAGE_INFO[stageKey].filename : undefined} /> :
             <div className="image-panel image-panel--empty"><div className="image-panel__frame"><FileImage size={32} /><span>La imagen aparecerá aquí al terminar la generación.</span></div><div className="image-panel__caption">{STAGE_INFO[stageKey].label}</div></div>}
         </div>
-        <aside className="review-panel" aria-labelledby="stage-title"><p className="eyebrow">Etapa seleccionada</p>
+        <aside className="review-panel" aria-labelledby="stage-title"><p className="eyebrow">Etapa seleccionada · {SECTION_LABELS[activeSection].title}</p>
           <h2 id="stage-title">{STAGE_INFO[stageKey].label}</h2>
           <p className="review-panel__progress">{STAGE_INFO[stageKey].progress}</p>
-          {stageKey === 'final' && <p>Alineación natural desde los dientes originales, sin brackets. Compara también su coherencia con las otras etapas.</p>}
-          {stageKey !== 'final' && <p>Brackets metálicos pequeños y coherentes. Revisa que cada diente conserve su forma y color.</p>}
+          {activeSection === 'brackets' && (
+            stageKey === 'final'
+              ? <p>Alineación natural desde los dientes originales, sin brackets. Compara también su coherencia con las otras etapas.</p>
+              : <p>Brackets metálicos pequeños y coherentes. Revisa que cada diente conserve su forma y color.</p>
+          )}
+          {activeSection === 'carillas' && (
+            <p>Carillas estéticas de porcelana con contornos armónicos y brillo vítreo controlado. Revisa la simetría incisal y la ausencia de artefactos en labios y encías.</p>
+          )}
+          {activeSection === 'blanqueamiento' && (
+            <p>Aclarado cromático puro en esmalte. Comprueba que las formas anatómicas, bordes y separaciones originales se hayan conservado exactamente iguales.</p>
+          )}
           {stage.quality && <div className="quality"><ShieldCheck size={18} /><span>Exterior verificado: {stage.quality.outsideChangedPixels} píxeles cambiados fuera de la máscara.</span></div>}
           {stage.error && <Notice tone={stage.status === 'interrupted' ? 'warning' : 'danger'}>{stage.error}</Notice>}
           {busyJob && ['queued', 'generating'].includes(stage.status) && <div className="working-state" role="status"><span className="working-state__spinner" /><strong>{stage.status === 'queued' ? 'En espera de generación…' : `${providerName} está generando esta etapa…`}</strong><p>La página puede recargarse; este intento permanecerá registrado.</p></div>}
@@ -368,14 +449,14 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
             <Button tone="neutral" shape="outline" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Comparar en grande</Button>
             <Button tone="danger" shape="outline" disabled={busy} onClick={() => { void review('reject'); }}>Rechazar candidato</Button>
             <Button tone="primary" shape="solid" icon={<Check size={18} />} disabled={busy} onClick={() => { void review('accept'); }}>
-              {stageKey === 'final' ? 'Aceptar etapa' : 'Aceptar y revisar siguiente'}
+              {stageKey === currentStages[currentStages.length - 1] ? 'Aceptar etapa' : 'Aceptar y revisar siguiente'}
             </Button>
           </div>}
           {stage.status === 'accepted' && <Notice tone="success">Etapa aceptada. Puedes revisar o descargar su fotografía independiente.</Notice>}
           {stage.status !== 'needs_review' && stage.outputAssetId && <Button tone="neutral" shape="outline" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Comparar en grande</Button>}
         </aside>
       </div>
-      {allAccepted && <section className="completion" role="status"><Check size={22} /><div><h2>Las tres etapas están listas</h2><p>Descarga cada fotografía desde su etapa. AHORA sigue siendo el archivo original.</p></div></section>}
+      {allAccepted && <section className="completion" role="status"><Check size={22} /><div><h2>{activeSection === 'brackets' ? 'Las tres etapas están listas' : `Las tres etapas de ${SECTION_LABELS[activeSection].title} están listas`}</h2><p>Descarga cada fotografía desde su etapa o prueba las demás secciones arriba. AHORA sigue siendo el archivo original.</p></div></section>}
       {sim.attempts.length > 0 && <details className="attempt-history"><summary>Historial de intentos · {sim.attempts.length}</summary>
         <ul>{[...sim.attempts].reverse().map((attempt) => <li key={attempt.id}>
           <strong>{ATTEMPT_LABELS[attempt.stage]}</strong><span>{date(attempt.createdAt)}</span><span>{attempt.status === 'failed' && attempt.errorCode?.startsWith('VISUAL_') ? 'Apartado por control visual' : STATUS_LABEL[attempt.status]}</span>

@@ -1,4 +1,4 @@
-import type { Health, HistoryPage, PromptConfig, Simulation, StageKey } from '../shared/domain';
+import type { Health, HistoryPage, PromptConfig, Simulation, StageKey, StudioSection } from '../shared/domain';
 import { MAX_UPLOAD_BYTES } from '../shared/domain';
 
 export class ApiError extends Error {
@@ -33,9 +33,9 @@ export const api = {
     read<Simulation>(json('POST', '/api/simulations/' + sim.id + '/provider', { revision: sim.revision })),
   mask: (sim: Simulation, png: string) =>
     read<Simulation>(json('PUT', '/api/simulations/' + sim.id + '/mask', { revision: sim.revision, png })),
-  generateBatch: (sim: Simulation, requestId: string) =>
+  generateBatch: (sim: Simulation, requestId: string, section: StudioSection = 'brackets') =>
     read<{ simulation: Simulation; batchId: string; reused: boolean }>(
-      json('POST', '/api/simulations/' + sim.id + '/batch', { revision: sim.revision, requestId, notes: '' })),
+      json('POST', '/api/simulations/' + sim.id + '/batch', { revision: sim.revision, requestId, notes: '', section })),
   generate: (sim: Simulation, stage: StageKey, notes: string, requestId: string) =>
     read<{ simulation: Simulation; attemptId: string; reused: boolean }>(
       json('POST', '/api/simulations/' + sim.id + '/stages/' + stage + '/generate',

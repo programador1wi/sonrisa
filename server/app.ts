@@ -8,7 +8,7 @@ import { SimulationService } from './service.js';
 import { PROMPT_VERSION } from '../shared/prompts.js';
 import { AppError } from './errors.js';
 import type { ImageProvider } from './provider.js';
-import { isStageKey, MAX_UPLOAD_BYTES, STAGES, STAGE_INFO } from '../shared/domain.js';
+import { isStageKey, MAX_UPLOAD_BYTES, ALL_STAGE_KEYS, STAGE_INFO } from '../shared/domain.js';
 
 export interface AppOptions {
   dataDir: string; provider: ImageProvider; model: string; staticDir?: string;
@@ -18,12 +18,12 @@ export interface AppOptions {
 const idSchema = z.string().uuid();
 const revisionSchema = z.number().int().min(0);
 const paramsSchema = z.object({ id: idSchema });
-const stageParams = paramsSchema.extend({ stage: z.enum(STAGES) });
+const stageParams = paramsSchema.extend({ stage: z.enum(ALL_STAGE_KEYS) });
 const promptField = z.string().trim().min(1).max(12_000);
 const promptsSchema = z.object({
   common: promptField,
-  stages: z.object({ month_6: promptField, month_18: promptField, final: promptField }).strict(),
-}).strict();
+  stages: z.record(z.string(), promptField),
+});
 
 export async function buildApp(options: AppOptions) {
   const app = Fastify({ logger: false, bodyLimit: MAX_UPLOAD_BYTES * 2, requestTimeout: 60_000 });
@@ -120,8 +120,13 @@ export async function buildApp(options: AppOptions) {
   });
   app.post('/api/simulations/:id/batch', async (request, reply) => {
     const { id } = paramsSchema.parse(request.params);
-    const body = z.object({ revision: revisionSchema, requestId: idSchema, notes: z.string().trim().max(2000).default('') }).parse(request.body);
-    const result = await service.enqueueBatch(id, body.revision, body.requestId, body.notes);
+    const body = z.object({
+      revision: revisionSchema,
+      requestId: idSchema,
+      notes: z.string().trim().max(2000).default(''),
+      section: z.enum(['brackets', 'carillas', 'blanqueamiento']).default('brackets'),
+    }).parse(request.body);
+    const result = await service.enqueueBatch(id, body.revision, body.requestId, body.notes, body.section);
     return reply.code(202).send(result);
   });
   app.post('/api/simulations/:id/stages/:stage/generate', async (request, reply) => {

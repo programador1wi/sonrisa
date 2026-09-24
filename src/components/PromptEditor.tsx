@@ -20,7 +20,10 @@ export function PromptEditor({ sim, saving, onDirtyChange, onSave, onCancel }: {
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   const stale = sim.revision !== baseRevision;
   const valid = draft.common.trim().length > 0 && draft.common.length <= 12_000 &&
-    STAGES.every((key) => draft.stages[key].trim().length > 0 && draft.stages[key].length <= 12_000);
+    STAGES.every((key) => {
+      const text = draft.stages[key];
+      return typeof text === 'string' && text.trim().length > 0 && text.length <= 12_000;
+    });
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange(false); }, [onDirtyChange]);
   useEffect(() => { firstField.current?.focus(); }, []);
@@ -46,7 +49,7 @@ export function PromptEditor({ sim, saving, onDirtyChange, onSave, onCancel }: {
       {STAGES.map((key) => <div className="prompt-editor__field" key={key}>
         <label htmlFor={'prompt-' + key}>{STAGE_INFO[key].label}</label>
         <p id={'prompt-' + key + '-help'}>Instrucciones específicas para esta fotografía independiente.</p>
-        <textarea id={'prompt-' + key} className="resize-none" aria-describedby={'prompt-' + key + '-help'} value={draft.stages[key]}
+        <textarea id={'prompt-' + key} className="resize-none" aria-describedby={'prompt-' + key + '-help'} value={draft.stages[key] ?? ''}
           maxLength={12_000} onChange={(event) => setStage(key, event.target.value)} />
       </div>)}
     </div>
