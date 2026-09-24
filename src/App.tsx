@@ -372,7 +372,7 @@ function Workspace({ sim, setSim, health, onDirtyChange, onError, onDeleted, ref
             </Button>
           </div>}
           {stage.status === 'accepted' && <Notice tone="success">Etapa aceptada. Puedes revisar o descargar su fotografía independiente.</Notice>}
-          {stage.outputAssetId && <Button tone="neutral" shape="outline" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Abrir comparación</Button>}
+          {stage.status !== 'needs_review' && stage.outputAssetId && <Button tone="neutral" shape="outline" icon={<Eye size={17} />} onClick={() => setCompare(stageKey)}>Comparar en grande</Button>}
         </aside>
       </div>
       {allAccepted && <section className="completion" role="status"><Check size={22} /><div><h2>Las tres etapas están listas</h2><p>Descarga cada fotografía desde su etapa. AHORA sigue siendo el archivo original.</p></div></section>}
